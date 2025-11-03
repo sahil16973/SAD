@@ -1,0 +1,175 @@
+In DVWA, demonstrate an OS Command Injection vulnerability and mitigate it by using input sanitization (eg, filter input() or regex).
+
+5th prac
+Create 2 files
+vulnerable_demo.py
+fixed_demo.py
+
+# fixed_demo.py
+# SAFE demo: input validation + subprocess argument list (no shell).
+# Validates IP or strict hostname, rejects suspicious inputs, and never uses shell=True.
+
+from flask import Flask, request
+from markupsafe import escape as html_escape
+import subprocess
+import ipaddress
+import re
+import platform
+
+app = Flask(__name__)
+
+IS_WINDOWS = platform.system().lower().startswith("win")
+PING_FLAG = "-n" if IS_WINDOWS else "-c"
+
+# RFC-lite hostname regex (enforces label rules and total length <= 255)
+HOSTNAME_RE = re.compile(
+    r'^(?=.{1,255}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+)
+
+@app.route("/")
+def home():
+    return (
+        "<h3>SAFE demo (validated, no shell)</h3>"
+        "<p>Use: /ping?target=1.1.1.1</p>"
+        "<p>This app validates input and calls ping without invoking a shell.</p>"
+    )
+
+def is_valid_ip_or_hostname(value: str) -> bool:
+    if not value or len(value) > 255:
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        pass
+    return HOSTNAME_RE.match(value) is not None
+
+@app.route("/ping")
+def ping():
+    raw = (request.args.get("target") or "").strip()
+    if not raw:
+        return "Usage: /ping?target=1.2.3.4", 400
+
+    # Validation step
+    if not is_valid_ip_or_hostname(raw):
+        return "Invalid target (must be valid IP or strict hostname).", 400
+
+    # Build argument list — this avoids shell interpretation entirely
+    cmd = ["ping", PING_FLAG, "3", raw]
+
+    try:
+        completed = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        output = completed.stdout
+    except subprocess.CalledProcessError as e:
+        output = e.stdout or str(e)
+    except FileNotFoundError:
+        return "Ping utility not available on this system.", 500
+
+    # Show executed argv (for observation) and the output
+    argv_display = " ".join([html_escape(part) for part in cmd])
+    return f"<h4>Executed command arguments (safe)</h4><pre>{argv_display}</pre><h4>Output</h4><pre>{html_escape(output)}</pre>"
+
+if __name__ == "__main__":
+    app.run(debug=True, host="127.0.0.1", port=5001)
+
+
+
+
+
+
+
+
+# vulnerable_demo.py
+# Instrumented vulnerable demo — LOCAL LAB ONLY.
+# WARNING: This file is intentionally vulnerable in its logic,
+# but for safety it will NOT execute commands that contain shell metacharacters.
+# It prints the exact shell string it would run so you can observe the difference.
+
+from flask import Flask, request
+import subprocess
+import platform
+import shlex
+from markupsafe import escape as html_escape
+
+app = Flask(__name__)
+
+IS_WINDOWS = platform.system().lower().startswith("win")
+PING_FLAG = "-n" if IS_WINDOWS else "-c"
+
+# simple home page
+@app.route("/")
+def home():
+    return (
+        "<h3>VULNERABLE demo (instrumented & safe)</h3>"
+        "<p>Use: /ping?target=1.1.1.1</p>"
+        "<p>This page shows how an unsafe app builds a shell command string.</p>"
+    )
+
+# helper to detect obvious shell metacharacters
+def has_shell_meta(s: str) -> bool:
+    # common characters used in command chaining/pipe/redirection
+    metas = [';', '&', '|', '`', '$', '>', '<', '\\']
+    return any(ch in s for ch in metas)
+
+@app.route("/ping")
+def ping():
+    raw = (request.args.get("target") or "").strip()
+    if not raw:
+        return "Usage: /ping?target=1.1.1.1", 400
+
+    # Build the shell command string UNSAFELY (what malicious code would do)
+    # NOTE: we do NOT sanitize here because we are demonstrating the vulnerable pattern.
+    cmd = f"ping {PING_FLAG} 3 {raw}"
+
+    # If cmd includes suspicious metacharacters, do not execute for safety.
+    if has_shell_meta(raw):
+        # Show the constructed command (escaped for HTML) and a warning instead of executing.
+        msg = (
+            "<h4>Constructed shell command (vulnerable pattern)</h4>"
+            f"<pre>{html_escape(cmd)}</pre>"
+            "<p style='color:darkred'><b>Warning:</b> input contains shell metacharacters; "
+            "for safety this demo will <i>not</i> execute the command. "
+            "This demonstrates how a vulnerable app hands unsanitized input to a shell.</p>"
+        )
+        return msg, 200
+
+    # For benign inputs (no meta chars) we execute the ping and return real output
+    try:
+        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, universal_newlines=True)
+    except subprocess.CalledProcessError as e:
+        output = e.output or str(e)
+    except FileNotFoundError:
+        return "Ping utility not available on this system.", 500
+
+    return f"<h4>Constructed shell command (vulnerable pattern)</h4><pre>{html_escape(cmd)}</pre><h4>Output</h4><pre>{html_escape(output)}</pre>"
+
+if __name__ == "__main__":
+    app.run(debug=True, host="127.0.0.1", port=5000)
+
+
+
+
+
+For Running the code
+Step1:
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+Step2:
+pip install flask markupsafe
+
+step3:
+python vulnerable_demo.py
+step4:
+python fixed_demo.py
+How to observe the difference (safe tests)
+1.	Benign input (expected same visible result):
+o	Vulnerable: http://127.0.0.1:5000/ping?target=1.1.1.1
+o	Fixed: http://127.0.0.1:5001/ping?target=1.1.1.1
+Both will run ping and show output — this demonstrates that for safe input the visible behavior matches.
+2.	Suspicious input (safe, non-destructive test):
+o	Try: http://127.0.0.1:5000/ping?target=1.1.1.1;echoX
+	Vulnerable app will display the constructed shell string (e.g. ping -n 3 1.1.1.1;echoX) and a warning, but will not execute it (this demo is instrumented to avoid executing dangerous strings).
+o	Try: http://127.0.0.1:5001/ping?target=1.1.1.1;echoX
+	Fixed app will reject it with: Invalid target (must be valid IP or strict hostname).
+
