@@ -1,0 +1,2 @@
+Open Burp Suite, intercept a request from a demo site, and display captured HTTP headers. Identify any insecure parameter.
+
