@@ -1,2 +1,50 @@
 Open Burp Suite, intercept a request from a demo site, and display captured HTTP headers. Identify any insecure parameter.
 
+
+Steps (do this in order)
+
+1.Open Burp Suite.
+
+2.Enable proxy listener: Burp → Proxy → Options → ensure Proxy Listener on 127.0.0.1:8080 (default).
+
+3.Configure your browser to use HTTP(S) proxy 127.0.0.1:8080.
+For Chrome/Firefox: Settings → Network / Proxy → manual proxy 127.0.0.1:8080.
+
+4.(If site uses HTTPS) Install Burp CA: In browser, go to http://burp → CA certificate → import into browser’s trusted certificates (follow prompts).
+
+5.Turn on interception: Burp → Proxy → Intercept → click Intercept is on.
+
+6.In the browser open the demo site and perform the action you want to capture (page load / click login). Burp will pause the request.
+
+7.View the intercepted request: In Burp’s Intercept tab you’ll see the request start-line, headers, and body.
+If you want to let it proceed, click Forward.
+
+8.Alternatively open Proxy → HTTP history, find the entry, click it and select the Request tab to view headers and request body; select Response tab to view Set-Cookie headers.
+
+9.Export raw request (optional): Right-click the entry → Save item or Copy → Copy request to paste elsewhere.
+
+
+
+How to identify insecure parameters (quick checklist)
+
+1.Any query parameter names or form fields like: password, passwd, pwd, token, access_token, api_key, sessionid, auth, authorization → insecure if present in URL.
+
+2.Sensitive data in URL/query string (visible in start-line like GET /path?token=...) — insecure (should not be in URLs).
+
+3.GET requests carrying sensitive params (should be POST over TLS) → insecure.
+
+4.Plain http:// (not https://) in the request URL → very insecure.
+
+5.Authorization tokens in URL instead of Authorization: Bearer ... header → insecure.
+
+6.Referer header containing full URL with secrets → risk of leakage.
+
+7.Response Set-Cookie missing Secure or HttpOnly flags → insecure (check in Response tab).
+
+8.Long opaque values in query params (very long strings) — likely tokens — treat as sensitive.
+
+
+What to report (one-liner)
+
+Copy the request start-line and the headers you see, then list any flagged item from the checklist (e.g., token in URL, GET with password, http:// used, missing cookie flags).
+
